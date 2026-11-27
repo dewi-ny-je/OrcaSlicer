@@ -716,6 +716,8 @@ public:
         //BBS: add more arrangeSettings
         bool is_seq_print        = false;
         bool  align_to_y_axis    = false;
+        // Orca: give each object its own random spot on the plate so the bed wears evenly.
+        bool  randomize_placement = false;
 
         // The Arrange options panel's rule between two of its options: Align to Y axis is off while auto
         // rotation is on. Returns whether that turned it off.
@@ -978,6 +980,8 @@ public:
 
     void load_arrange_settings();
     ArrangeSettings& get_arrange_settings();
+    // Random placement is one setting for every mode, so each mode's copy gets the new value.
+    void set_randomize_placement(bool value);
     // Saves the current print mode's spacing, rotation and material rule to the app config under the
     // keys the Arrange options panel writes, for settings changed outside the panel.
     void store_arrange_settings();

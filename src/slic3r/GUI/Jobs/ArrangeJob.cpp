@@ -687,6 +687,8 @@ void ArrangeJob::prepare()
     m_plater->get_notification_manager()->bbl_close_plateinfo_notification();
 
     params = init_arrange_params(m_plater);
+    // Only Arrange draws random spots: Fill bed and placing new instances keep what is already there.
+    params.randomize_placement = m_plater->canvas3D()->get_arrange_settings().randomize_placement;
 
     //BBS update extruder params and speed table before arranging
     const Slic3r::DynamicPrintConfig& config = wxGetApp().preset_bundle->full_config();

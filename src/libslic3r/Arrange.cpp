@@ -37,6 +37,9 @@
 #include <vector>
 #include <tuple>
 #include <set>
+#include <map>
+#include <random>
+#include <type_traits>
 #include <string>
 
 #if defined(_MSC_VER) && defined(__clang__)
@@ -1259,6 +1262,97 @@ Radians fit_into_box_rotation(const S &sh, const _Box<TPoint<S>> &box)
     return fitIntoBoxRotation<S, TCompute<S>, boost::rational<LargeInt>>(sh, box);
 }
 
+// Whether the item lies wholly on the bin.
+static bool item_in_bin(const Item &itm, const Box &bin) { return sl::isInside(itm.boundingBox(), bin); }
+static bool item_in_bin(const Item &itm, const Circle &bin) { return itm.isInside(bin); }
+static bool item_in_bin(const Item &itm, const ExPolygon &bin)
+{
+    double outside = 0;
+    for (const ExPolygon &e : diff_ex(itm.transformedShape(), bin))
+        outside += e.area();
+    return outside <= sqr(scaled(0.01));
+}
+
+// Whether two items, inflated, take up some of the same room; touching is fine. A bed exclusion only
+// counts for the items it applies to, as in the packer's should_check_collision.
+static bool items_overlap(const Item &a, const Item &b)
+{
+    if ((a.is_bed_exclusion && !bed_exclusion_applies_impl(b, a)) || (b.is_bed_exclusion && !bed_exclusion_applies_impl(a, b)))
+        return false;
+    const Box ba = a.boundingBox(), bb = b.boundingBox();
+    if (ba.maxCorner().x() <= bb.minCorner().x() || bb.maxCorner().x() <= ba.minCorner().x() ||
+        ba.maxCorner().y() <= bb.minCorner().y() || bb.maxCorner().y() <= ba.minCorner().y())
+        return false;
+    double shared = 0;
+    for (const ExPolygon &e : intersection_ex(a.transformedShape(), b.transformedShape()))
+        shared += e.area();
+    return shared > sqr(scaled(0.01));
+}
+
+// Moves each packed item to a random spot on its bed, clear of the obstacles there (the bed's fixed
+// items and the excluded regions) and of the items moved before it. The packer's spacing holds since
+// every item is still inflated by it, and the packer's bed and rotation are kept. Each spot is drawn
+// on its own rather than shifting the packed pile, so that over many prints the items cover the whole
+// bed and not only its middle. The largest items go first, as they are the hardest to fit; a bed
+// where some item finds no spot is tried again from scratch a few times, then keeps its packing.
+template<class BinT>
+static void randomize_placement(std::vector<Item> &shapes, const std::vector<Item> &fixed, const std::vector<Item> &regions,
+                                const BinT &bin, unsigned seed)
+{
+    constexpr int bed_attempts  = 20;
+    constexpr int spot_attempts = 500;
+
+    std::mt19937 rng(seed != 0 ? seed : std::random_device{}());
+    const Box    binbb = sl::boundingBox(bin);
+
+    std::map<int, std::vector<Item *>> beds;
+    for (Item &itm : shapes)
+        if (itm.binId() >= 0)
+            beds[itm.binId()].push_back(&itm);
+
+    for (auto &[bed_id, items] : beds) {
+        std::stable_sort(items.begin(), items.end(), [](const Item *a, const Item *b) { return a->area() > b->area(); });
+
+        std::vector<const Item *> obstacles;
+        for (const Item &r : regions)
+            obstacles.push_back(&r);
+        for (const Item &f : fixed)
+            if (f.binId() == bed_id)
+                obstacles.push_back(&f);
+
+        std::vector<Item> moved;
+        for (int attempt = 0; attempt < bed_attempts && moved.size() < items.size(); ++attempt) {
+            moved.clear();
+            moved.reserve(items.size());
+            for (const Item *orig : items) {
+                Item       cand  = *orig;
+                const Box  bb    = cand.boundingBox();
+                const auto slack_x = binbb.width() - bb.width(), slack_y = binbb.height() - bb.height();
+                if (slack_x < 0 || slack_y < 0)
+                    break;
+                std::uniform_int_distribution<coord_t> dx(0, slack_x), dy(0, slack_y);
+                bool found = false;
+                for (int i = 0; i < spot_attempts && !found; ++i) {
+                    const Point corner{getX(binbb.minCorner()) + dx(rng), getY(binbb.minCorner()) + dy(rng)};
+                    cand.translation(orig->translation() + corner - bb.minCorner());
+                    found = item_in_bin(cand, bin) &&
+                            std::none_of(obstacles.begin(), obstacles.end(), [&cand](const Item *o) { return items_overlap(cand, *o); }) &&
+                            std::none_of(moved.begin(), moved.end(), [&cand](const Item &o) { return items_overlap(cand, o); });
+                }
+                if (!found)
+                    break;
+                moved.emplace_back(std::move(cand));
+            }
+        }
+
+        if (moved.size() == items.size()) {
+            for (size_t i = 0; i < items.size(); ++i)
+                items[i]->translation(moved[i].translation());
+        } else
+            BOOST_LOG_TRIVIAL(info) << "arrange: no random spots for every item on bed " << bed_id << ", keeping the packed layout";
+    }
+}
+
 template<class BinT> // Arrange for arbitrary bin type
 void _arrange(
         std::vector<Item> &           shapes,
@@ -1280,8 +1374,9 @@ void _arrange(
     // the Y span of a compacted prime tower, which objfunc() has just kept them out of. A
     // best_object_pos away from the bed centre makes the AutoArranger align the pile to it whatever
     // do_final_align says, so that point goes back to the centre as well.
-    if (params.compacted_tower_growth >= 0 &&
-        std::any_of(shapes.begin(), shapes.end(), [&params](const Item &itm) { return itm.height > params.clearance_height_to_rod; })) {
+    const bool tall_beside_compacted_tower = params.compacted_tower_growth >= 0 &&
+        std::any_of(shapes.begin(), shapes.end(), [&params](const Item &itm) { return itm.height > params.clearance_height_to_rod; });
+    if (tall_beside_compacted_tower) {
         mod_params.do_final_align = false;
         mod_params.align_center   = Vec2d(0.5, 0.5);
     }
@@ -1315,6 +1410,13 @@ void _arrange(
     }
 
     arranger(inp.begin(), inp.end());
+    // Random spots would break the print order of sequential and belt prints, and could take tall
+    // objects back over a compacted prime tower.
+    if (params.randomize_placement && !params.is_seq_print && !params.is_belt && !tall_beside_compacted_tower) {
+        std::vector<Item> regions = arranger.config().m_excluded_regions;
+        regions.insert(regions.end(), arranger.config().m_nonprefered_regions.begin(), arranger.config().m_nonprefered_regions.end());
+        randomize_placement(shapes, excludes, regions, corrected_bin, params.random_seed);
+    }
     for (Item &itm : inp) itm.inflation(0);
 }
 
@@ -1448,7 +1550,11 @@ void arrange(ArrangePolygons &      arrangables,
 
     for (Item &itm : fixeditems) itm.inflate(scaled(-2. * EPSILON));
 
-    _arrange(items, fixeditems, to_nestbin(bed), params, params.progressind, params.stopcondition);
+    // An infinite bed has no room to draw random spots from.
+    ArrangeParams bed_params = params;
+    if constexpr (std::is_same_v<BedT, InfiniteBed>)
+        bed_params.randomize_placement = false;
+    _arrange(items, fixeditems, to_nestbin(bed), bed_params, params.progressind, params.stopcondition);
 
     for(size_t i = 0; i < items.size(); ++i) {
         Point tr = items[i].translation();

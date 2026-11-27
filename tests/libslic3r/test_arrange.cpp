@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <catch2/catch_all.hpp>
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Polygon.hpp"
@@ -1172,4 +1173,98 @@ TEST_CASE("Objects no taller than the nozzle height only keep the nozzle cone fr
     CHECK_THAT(compacted_tower_arrange_clearance({tall}, params, toolhead_radius), WithinAbs(toolhead_radius, EPSILON));
     // find_new_position() passes no objects.
     CHECK_THAT(compacted_tower_arrange_clearance({}, params, toolhead_radius), WithinAbs(toolhead_radius, EPSILON));
+}
+
+namespace {
+
+// Arranges with random placement and the given seed, so a failing case can be replayed.
+ArrangeParams random_params(unsigned seed, coord_t min_dist = 0)
+{
+    ArrangeParams p       = quiet_params(min_dist);
+    p.randomize_placement = true;
+    p.random_seed         = seed;
+    return p;
+}
+
+Vec2d centre_mm(const ArrangePolygon &ap) { return unscaled(ap.transformed_poly().contour.bounding_box().center()); }
+
+} // namespace
+
+TEST_CASE("Random placement keeps items on the bed, spaced and clear of a fixed part", "[Arrange]")
+{
+    const unsigned seed = GENERATE(1u, 2u, 3u, 4u, 5u);
+    // From a few items to a plate so full that random spots may not all be found, where the packed
+    // layout has to come back.
+    const int count = GENERATE(3, 12, 30);
+    INFO("seed " << seed << ", " << count << " items");
+
+    ArrangePolygons fixed = squares(1, 40.);
+    fixed.front().translation = {scaled(80.), scaled(80.)};
+    ArrangePolygons items = squares(count, 20.);
+    for (ArrangePolygon &ap : items)
+        ap.inflation = scaled(2.);
+
+    arrange(items, fixed, bed(200, 200), random_params(seed));
+
+    std::vector<BoundingBox> boxes;
+    for (const ArrangePolygon &ap : items) {
+        REQUIRE(ap.bed_idx == 0);
+        const BoundingBox bb = ap.transformed_poly().contour.bounding_box();
+        CHECK(bed(200, 200).contains(bb));
+        boxes.push_back(bb);
+    }
+    // 2 mm inflation each keeps every pair 4 mm apart (0.5 mm slack for nester rounding).
+    for (size_t i = 0; i < boxes.size(); ++i)
+        for (size_t j = i + 1; j < boxes.size(); ++j)
+            CHECK(box_gap(boxes[i], boxes[j]) >= scaled(3.5));
+    items.insert(items.end(), fixed.begin(), fixed.end());
+    require_no_overlap(items);
+}
+
+TEST_CASE("Random placement spreads a single item over the whole bed", "[Arrange]")
+{
+    // Packing always puts it in the middle; random spots reach every quarter of the bed.
+    std::array<int, 4> quarters{};
+    for (unsigned seed = 1; seed <= 40; ++seed) {
+        ArrangePolygons items = squares(1, 20.);
+        arrange(items, bed(200, 200), random_params(seed));
+        REQUIRE(items.front().bed_idx == 0);
+        const Vec2d c = centre_mm(items.front());
+        ++quarters[(c.x() < 100. ? 0 : 1) + (c.y() < 100. ? 0 : 2)];
+    }
+    for (int n : quarters)
+        CHECK(n > 0);
+}
+
+TEST_CASE("Random placement moves each item on its own, not the packed pile as one", "[Arrange]")
+{
+    // Packed, two 20 mm squares lie side by side, their centres about 20 mm apart. Shifting that
+    // pair as a block would keep them so; placed on their own they often end far apart.
+    double farthest = 0.;
+    for (unsigned seed = 1; seed <= 20; ++seed) {
+        ArrangePolygons items = squares(2, 20.);
+        arrange(items, bed(200, 200), random_params(seed, scaled(2.)));
+        farthest = std::max(farthest, (centre_mm(items[0]) - centre_mm(items[1])).norm());
+    }
+    CHECK(farthest > 80.);
+}
+
+TEST_CASE("Random placement leaves a sequential print packed", "[Arrange]")
+{
+    ArrangePolygons packed = squares_of_heights({NOZZLE_HEIGHT_MM * 2, NOZZLE_HEIGHT_MM * 2, NOZZLE_HEIGHT_MM / 2});
+    for (ArrangePolygon &ap : packed)
+        ap.extrude_ids = {1}; // the sequential sort reads extrude_ids.front()
+    ArrangePolygons random = packed;
+    ArrangePolygons none;
+
+    ArrangeParams p = seq_print_params(0);
+    arrange(packed, none, bed(200, 200), p);
+    p.randomize_placement = true;
+    p.random_seed         = 7;
+    arrange(random, none, bed(200, 200), p);
+
+    for (size_t i = 0; i < packed.size(); ++i) {
+        CHECK(random[i].bed_idx == packed[i].bed_idx);
+        CHECK(random[i].translation == packed[i].translation);
+    }
 }

@@ -2128,11 +2128,14 @@ void GLCanvas3D::load_arrange_settings()
     load_bool("enable_rotation_fff_seq_print", m_arrange_settings_fff_seq_print.enable_rotation);
     load_bool("enable_rotation_sla",           m_arrange_settings_sla.enable_rotation);
 
-    // These two keys carry no postfix, so the one stored value covers both FFF modes.
+    // These keys carry no postfix, so the one stored value covers every mode that reads it.
     load_bool("allow_multi_materials_on_same_plate", m_arrange_settings_fff.allow_multi_materials_on_same_plate);
     load_bool("allow_multi_materials_on_same_plate", m_arrange_settings_fff_seq_print.allow_multi_materials_on_same_plate);
     load_bool("avoid_extrusion_cali_region",         m_arrange_settings_fff.avoid_extrusion_cali_region);
     load_bool("avoid_extrusion_cali_region",         m_arrange_settings_fff_seq_print.avoid_extrusion_cali_region);
+    load_bool("randomize_placement",                 m_arrange_settings_fff.randomize_placement);
+    load_bool("randomize_placement",                 m_arrange_settings_fff_seq_print.randomize_placement);
+    load_bool("randomize_placement",                 m_arrange_settings_sla.randomize_placement);
 
     //BBS: add specific arrange settings
     m_arrange_settings_fff_seq_print.is_seq_print = true;
@@ -2159,8 +2162,8 @@ GLCanvas3D::ArrangeSettings& GLCanvas3D::get_arrange_settings()
 
 void GLCanvas3D::store_arrange_settings()
 {
-    // The panel's keys: spacing and rotation carry the print mode's postfix, the material rule is
-    // one key for every mode. Align to Y axis is not stored.
+    // The panel's keys: spacing and rotation carry the print mode's postfix, the material rule and
+    // random placement are one key for every mode. Align to Y axis is not stored.
     const PrinterTechnology ptech   = current_printer_technology();
     const std::string       postfix = ptech == ptSLA ? "_sla" :
                                       wxGetApp().global_print_sequence() == PrintSequence::ByObject ? "_fff_seq_print" : "_fff";
@@ -2170,6 +2173,7 @@ void GLCanvas3D::store_arrange_settings()
     appcfg->set("arrange", "enable_rotation" + postfix, settings.enable_rotation);
     if (ptech == ptFFF)
         appcfg->set("arrange", "allow_multi_materials_on_same_plate", settings.allow_multi_materials_on_same_plate);
+    appcfg->set("arrange", "randomize_placement", settings.randomize_placement);
 }
 
 int GLCanvas3D::GetHoverId()
@@ -7556,6 +7560,7 @@ void GLCanvas3D::_render_arrange_menu(float left, float right, float bottom, flo
     std::string dist_key = "min_object_distance", rot_key = "enable_rotation";
     std::string multi_material_key = "allow_multi_materials_on_same_plate";
     std::string avoid_extrusion_key = "avoid_extrusion_cali_region";
+    std::string randomize_key = "randomize_placement";
     std::string postfix;
     //BBS:
     bool seq_print = false;
@@ -7614,6 +7619,23 @@ void GLCanvas3D::_render_arrange_menu(float left, float right, float bottom, flo
         if (settings_out.enable_rotation == true) { imgui->disabled_end(); }
     }
 
+    // Random spots would break the print order of a sequential or belt print, so arrange packs those
+    // as usual whatever this says.
+    {
+        const auto *belt_opt = current_config.option<ConfigOptionBool>("belt_printer");
+        const bool  ordered  = seq_print || (belt_opt && belt_opt->value);
+        if (ordered)
+            imgui->disabled_begin(true);
+        if (imgui->bbl_checkbox(_L("Randomize placement"), settings_out.randomize_placement))
+            appcfg->set("arrange", randomize_key.c_str(), settings_out.randomize_placement);
+        if (ordered)
+            imgui->disabled_end();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            imgui->tooltip(ordered ? _L("Not available when printing by object or on a belt printer.") :
+                                     _L("Place each object at its own random spot on the plate, so the build plate wears evenly instead of always in the middle."),
+                           imgui->scaled(20.f));
+    }
+
     ImGui::Separator();
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(15.0f, 10.0f));
     if (imgui->button(_L("Arrange"))) {
@@ -7638,6 +7660,7 @@ void GLCanvas3D::_render_arrange_menu(float left, float right, float bottom, flo
         appcfg->erase("arrange", rot_key);
         appcfg->erase("arrange", multi_material_key);
         appcfg->erase("arrange", avoid_extrusion_key);
+        appcfg->erase("arrange", randomize_key);
     }
     ImGui::PopStyleVar(1);
     imgui->end();

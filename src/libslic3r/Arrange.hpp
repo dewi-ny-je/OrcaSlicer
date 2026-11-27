@@ -172,6 +172,13 @@ struct ArrangeParams {
     bool  belt_reversed   = false;
     float belt_tilt_slope = 1.f; // cot(belt tilt angle), 0 when the belt is not tilted
 
+    // Orca: once packed, move each arranged item on its own to a random free spot of its bed, so
+    // the plate wears evenly instead of always in the middle. A bed whose items find no such spots
+    // keeps the packed layout. Ignored for sequential and belt prints, whose print order and
+    // gantry clearance depend on where the items lie.
+    bool     randomize_placement = false;
+    unsigned random_seed         = 0; // seed for randomize_placement; 0 draws one at random
+
     ArrangePolygons excluded_regions;   // regions cant't be used
     ArrangePolygons nonprefered_regions; // regions can be used but not prefered
 
@@ -199,6 +206,7 @@ struct ArrangeParams {
         ret += "\"allow_multi_materials_on_same_plate\":" + std::to_string(allow_multi_materials_on_same_plate) + ",";
         ret += "\"avoid_extrusion_cali_region\":" + std::to_string(avoid_extrusion_cali_region) + ",";
         ret += "\"is_seq_print\":" + std::to_string(is_seq_print) + ",";
+        ret += "\"randomize_placement\":" + std::to_string(randomize_placement) + ",";
         ret += "\"bed_shrink_x\":" + std::to_string(bed_shrink_x) + ",";
         ret += "\"bed_shrink_y\":" + std::to_string(bed_shrink_y) + ",";
         ret += "\"brim_skirt_distance\":" + std::to_string(brim_skirt_distance) + ",";

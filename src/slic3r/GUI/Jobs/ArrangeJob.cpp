@@ -1057,6 +1057,7 @@ arrangement::ArrangeParams init_arrange_params(Plater *p)
     params.is_seq_print                        = settings.is_seq_print;
     params.min_obj_distance                    = scaled(settings.distance);
     params.align_to_y_axis                     = settings.align_to_y_axis;
+    params.randomize_placement                 = settings.randomize_placement;
     if (print_config.belt_printer.value) {
         // Parts print in belt order: the belt runs across the gantry's tilt axis, a
         // rotation about X prints toward +Y and one about Y toward -X (see

@@ -687,6 +687,8 @@ void ArrangeJob::prepare()
     m_plater->get_notification_manager()->bbl_close_plateinfo_notification();
 
     params = init_arrange_params(m_plater);
+    // Only Arrange draws random spots: Fill bed and placing new instances keep what is already there.
+    params.randomize_placement = m_plater->canvas3D()->get_arrange_settings().randomize_placement;
 
     //BBS update extruder params and speed table before arranging
     const Slic3r::DynamicPrintConfig& config = wxGetApp().preset_bundle->full_config();
@@ -1057,7 +1059,6 @@ arrangement::ArrangeParams init_arrange_params(Plater *p)
     params.is_seq_print                        = settings.is_seq_print;
     params.min_obj_distance                    = scaled(settings.distance);
     params.align_to_y_axis                     = settings.align_to_y_axis;
-    params.randomize_placement                 = settings.randomize_placement;
     if (print_config.belt_printer.value) {
         // Parts print in belt order: the belt runs across the gantry's tilt axis, a
         // rotation about X prints toward +Y and one about Y toward -X (see

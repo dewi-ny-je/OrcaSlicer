@@ -2160,6 +2160,12 @@ GLCanvas3D::ArrangeSettings& GLCanvas3D::get_arrange_settings()
     return *ptr;
 }
 
+void GLCanvas3D::set_randomize_placement(bool value)
+{
+    for (ArrangeSettings *settings : {&m_arrange_settings_fff, &m_arrange_settings_fff_seq_print, &m_arrange_settings_sla})
+        settings->randomize_placement = value;
+}
+
 void GLCanvas3D::store_arrange_settings()
 {
     // The panel's keys: spacing and rotation carry the print mode's postfix, the material rule and
@@ -7626,8 +7632,10 @@ void GLCanvas3D::_render_arrange_menu(float left, float right, float bottom, flo
         const bool  ordered  = seq_print || (belt_opt && belt_opt->value);
         if (ordered)
             imgui->disabled_begin(true);
-        if (imgui->bbl_checkbox(_L("Randomize placement"), settings_out.randomize_placement))
+        if (imgui->bbl_checkbox(_L("Randomize placement"), settings_out.randomize_placement)) {
+            set_randomize_placement(settings_out.randomize_placement);
             appcfg->set("arrange", randomize_key.c_str(), settings_out.randomize_placement);
+        }
         if (ordered)
             imgui->disabled_end();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -7660,6 +7668,7 @@ void GLCanvas3D::_render_arrange_menu(float left, float right, float bottom, flo
         appcfg->erase("arrange", rot_key);
         appcfg->erase("arrange", multi_material_key);
         appcfg->erase("arrange", avoid_extrusion_key);
+        set_randomize_placement(false);
         appcfg->erase("arrange", randomize_key);
     }
     ImGui::PopStyleVar(1);

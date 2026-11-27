@@ -1297,8 +1297,9 @@ static bool items_overlap(const Item &a, const Item &b)
 // where some item finds no spot is tried again from scratch a few times, then keeps its packing.
 template<class BinT>
 static void randomize_placement(std::vector<Item> &shapes, const std::vector<Item> &fixed, const std::vector<Item> &regions,
-                                const BinT &bin, unsigned seed)
+                                const BinT &bin, unsigned seed, const std::function<bool()> &stopfn)
 {
+    auto stopped = [&stopfn] { return stopfn && stopfn(); };
     constexpr int bed_attempts  = 20;
     constexpr int spot_attempts = 500;
 
@@ -1311,6 +1312,8 @@ static void randomize_placement(std::vector<Item> &shapes, const std::vector<Ite
             beds[itm.binId()].push_back(&itm);
 
     for (auto &[bed_id, items] : beds) {
+        if (stopped())
+            return;
         std::stable_sort(items.begin(), items.end(), [](const Item *a, const Item *b) { return a->area() > b->area(); });
 
         std::vector<const Item *> obstacles;
@@ -1321,7 +1324,7 @@ static void randomize_placement(std::vector<Item> &shapes, const std::vector<Ite
                 obstacles.push_back(&f);
 
         std::vector<Item> moved;
-        for (int attempt = 0; attempt < bed_attempts && moved.size() < items.size(); ++attempt) {
+        for (int attempt = 0; attempt < bed_attempts && moved.size() < items.size() && !stopped(); ++attempt) {
             moved.clear();
             moved.reserve(items.size());
             for (const Item *orig : items) {
@@ -1348,7 +1351,8 @@ static void randomize_placement(std::vector<Item> &shapes, const std::vector<Ite
         if (moved.size() == items.size()) {
             for (size_t i = 0; i < items.size(); ++i)
                 items[i]->translation(moved[i].translation());
-        } else
+        }
+        else if (!stopped())
             BOOST_LOG_TRIVIAL(info) << "arrange: no random spots for every item on bed " << bed_id << ", keeping the packed layout";
     }
 }
@@ -1415,7 +1419,7 @@ void _arrange(
     if (params.randomize_placement && !params.is_seq_print && !params.is_belt && !tall_beside_compacted_tower) {
         std::vector<Item> regions = arranger.config().m_excluded_regions;
         regions.insert(regions.end(), arranger.config().m_nonprefered_regions.begin(), arranger.config().m_nonprefered_regions.end());
-        randomize_placement(shapes, excludes, regions, corrected_bin, params.random_seed);
+        randomize_placement(shapes, excludes, regions, corrected_bin, params.random_seed, stopfn);
     }
     for (Item &itm : inp) itm.inflation(0);
 }

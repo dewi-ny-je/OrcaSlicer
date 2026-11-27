@@ -980,6 +980,8 @@ public:
 
     void load_arrange_settings();
     ArrangeSettings& get_arrange_settings();
+    // Random placement is one setting for every mode, so each mode's copy gets the new value.
+    void set_randomize_placement(bool value);
     // Saves the current print mode's spacing, rotation and material rule to the app config under the
     // keys the Arrange options panel writes, for settings changed outside the panel.
     void store_arrange_settings();
